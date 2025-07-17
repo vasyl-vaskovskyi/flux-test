@@ -1,0 +1,57 @@
+#!/bin/bash
+
+if git rev-parse --verify HEAD >/dev/null 2>&1
+then
+        against=HEAD
+else
+        # Initial commit: diff against an empty tree object
+        against=$(git hash-object -t tree /dev/null)
+fi
+
+# If you want to allow non-ASCII filenames set this variable to true.
+allownonascii=$(git config --bool hooks.allownonascii)
+
+# Redirect output to stderr.
+exec 1>&2
+
+if ! yq -V > /dev/null 2>&1; then
+    echo Please install yq. https://github.com/mikefarah/yq
+    exit 1
+fi
+
+# save and change IFS
+OIFS="$IFS"
+IFS=$'\n'
+
+staged_files=($(git diff --name-only --cached))
+
+# restore it
+IFS="$OIFS"
+
+# get length of an array
+tLen=${#staged_files[@]}
+
+unencrpted_secrets=()
+
+for (( i=0; i<${tLen}; i++ )); do
+    file="${staged_files[$i]}"
+    if [ "${file: -4}" == ".yml" ] || [ "${file: -5}" == ".yaml" ]; then
+         if yq e -e 'select(.kind=="Secret" and has("sops") | not)' "$file" > /dev/null 2>&1; then
+            unencrpted_secrets+=("$file")
+         fi
+    fi
+done
+
+uLen=${#unencrpted_secrets[@]}
+
+RED='\033[0;31m'
+NC='\033[0m' # No Color
+
+if [ ${uLen} -gt 0 ] ; then
+    echo -e "There are unencrpted secrets! Please use \"sops -i -e\" to encrypt:\n"
+    for (( i=0; i<${uLen}; i++ )); do
+        echo -e "\t - ${RED}${unencrpted_secrets[$i]}${NC}"
+    done
+    echo
+    exit 1 
+fi
